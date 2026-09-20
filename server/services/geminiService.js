@@ -117,7 +117,18 @@ export const compareDocuments = async (docA, docB) => {
 };
 
 // ─── Embedding store (Gemini-only — no provider fallback needed for Q&A) ──────
+// Bounded to MAX_SESSIONS to avoid unbounded memory growth on a long-running
+// server; oldest session is evicted (simple FIFO, not true LRU).
+const MAX_SESSIONS = 50;
 const documentStore = new Map(); // Map<sessionId, Array<{ text, embedding }>>
+
+function rememberSession(sessionId, embeddings) {
+    if (documentStore.size >= MAX_SESSIONS && !documentStore.has(sessionId)) {
+        const oldestKey = documentStore.keys().next().value;
+        documentStore.delete(oldestKey);
+    }
+    documentStore.set(sessionId, embeddings);
+}
 
 export const indexDocument = async (sessionId, text) => {
     const words  = text.split(/\s+/);
@@ -133,7 +144,7 @@ export const indexDocument = async (sessionId, text) => {
         embeddings.push({ text: chunk, embedding: result.embeddings[0].values });
     }
 
-    documentStore.set(sessionId, embeddings);
+    rememberSession(sessionId, embeddings);
 };
 
 function cosineSimilarity(a, b) {

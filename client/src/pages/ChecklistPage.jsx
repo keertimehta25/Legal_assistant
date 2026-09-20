@@ -1,23 +1,21 @@
 import React, { useState } from 'react';
 import { useSession } from '../context/SessionContext';
+import { generateChecklist } from '../api/client';
 
 export default function ChecklistPage() {
     const { analysisResult } = useSession();
     const [checklist, setChecklist] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
     const handleGenerate = async () => {
         setLoading(true);
+        setError('');
         try {
-            const res = await fetch('http://localhost:3000/api/checklist', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ analysisResult })
-            });
-            const data = await res.json();
+            const data = await generateChecklist(analysisResult);
             setChecklist(data);
         } catch (err) {
-            console.error(err);
+            setError(err.message);
         } finally {
             setLoading(false);
         }
@@ -30,17 +28,23 @@ export default function ChecklistPage() {
     return (
         <div className="max-w-4xl mx-auto">
             <h2 className="text-3xl font-bold text-slate-800 mb-8">Action Checklist</h2>
-            
+
             {!checklist && !loading && (
-                <button 
+                <button
                     onClick={handleGenerate}
                     className="bg-blue-600 text-white px-6 py-2 rounded shadow hover:bg-blue-700 transition"
                 >
                     Generate Checklist & Questions for Lawyer
                 </button>
             )}
-            
+
             {loading && <p className="animate-pulse text-slate-500">Generating...</p>}
+
+            {error && (
+                <div className="mt-4 bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 text-sm">
+                    {error}
+                </div>
+            )}
 
             {checklist && (
                 <div className="grid md:grid-cols-2 gap-8 mt-8">

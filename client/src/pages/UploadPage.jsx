@@ -1,19 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSession } from '../context/SessionContext';
-
-const API = 'http://localhost:3000/api';
-
-/** Helper — calls a JSON API endpoint with retry-awareness */
-async function apiFetch(url, options = {}) {
-    const res = await fetch(url, options);
-    const data = await res.json();
-    if (!res.ok) {
-        // Surface the friendly message from the backend
-        throw new Error(data.error || `Request failed (${res.status})`);
-    }
-    return data;
-}
+import { uploadDocument, indexDocument, analyzeDocument } from '../api/client';
 
 export default function UploadPage() {
     const [loading, setLoading] = useState(false);
@@ -30,29 +18,18 @@ export default function UploadPage() {
         setError('');
         setStatus('Uploading and extracting text...');
 
-        const formData = new FormData();
-        formData.append('document', file);
-
         try {
             // 1. Upload & Extract Text
-            const { text } = await apiFetch(`${API}/upload`, { method: 'POST', body: formData });
+            const { text } = await uploadDocument(file);
             setDocumentText(text);
 
             // 2. Index for Q&A (embeddings)
             setStatus('Indexing document for Q&A (AI service may retry automatically)...');
-            await apiFetch(`${API}/index-document`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId, text }),
-            });
+            await indexDocument(sessionId, text);
 
             // 3. Analyze
             setStatus('Analyzing document (AI service may retry automatically)...');
-            const analysis = await apiFetch(`${API}/analyze`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text }),
-            });
+            const analysis = await analyzeDocument(text);
             setAnalysisResult(analysis);
 
             navigate('/dashboard');

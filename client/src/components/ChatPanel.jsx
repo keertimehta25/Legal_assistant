@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useSession } from '../context/SessionContext';
+import { askQuestion } from '../api/client';
 
 export default function ChatPanel() {
     const { sessionId, documentText } = useSession();
@@ -20,20 +21,15 @@ export default function ChatPanel() {
         setLoading(true);
 
         try {
-            const res = await fetch('http://localhost:3000/api/ask', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId, question: userQ })
-            });
-            const data = await res.json();
-            
-            setMessages(prev => [...prev, { 
-                role: 'bot', 
+            const data = await askQuestion(sessionId, userQ);
+
+            setMessages(prev => [...prev, {
+                role: 'bot',
                 content: data.answer,
-                chunks: data.chunks 
+                chunks: data.chunks
             }]);
         } catch (err) {
-            setMessages(prev => [...prev, { role: 'bot', content: 'Sorry, I encountered an error.' }]);
+            setMessages(prev => [...prev, { role: 'bot', content: `Sorry, I encountered an error: ${err.message}` }]);
         } finally {
             setLoading(false);
         }

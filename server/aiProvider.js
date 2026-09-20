@@ -2,14 +2,13 @@
  * aiProvider.js
  *
  * Unified AI provider with cross-provider fallback chain:
- *   1. gemini-2.5-flash      (primary)
- *   2. gemini-2.5-flash-lite (Gemini fallback)
- *   3. gpt-5.6-terra         (OpenAI fallback — for resilience during Gemini outages)
+ *   1. gemini-3.1-flash-lite  (primary)
+ *   2. gemini-3.5-flash-lite  (Gemini fallback)
+ *   3. gpt-5.6-terra          (OpenAI fallback — only if OPENAI_API_KEY is set)
  *
- * Each model gets up to MAX_RETRIES attempts with exponential backoff
- * before the chain moves to the next entry.
- * Only 503 (UNAVAILABLE) and 429 (rate limit) errors trigger fallthrough.
- * All other errors throw immediately.
+ * OpenAI is OPTIONAL: if OPENAI_API_KEY is missing, the client is never
+ * constructed and the OpenAI entry is dropped from the chain, so the server
+ * runs fine Gemini-only instead of crashing on startup.
  */
 
 import 'dotenv/config';
@@ -17,49 +16,52 @@ import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 
 const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const openai  = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ─── Provider chain ────────────────────────────────────────────────────────────
-// Priority: high-RPD Gemini lite models first (500/day each),
-// then OpenAI as final fallback if both Gemini entries are overloaded.
-const PROVIDER_CHAIN = [
-    { provider: 'gemini', model: 'gemini-3.1-flash-lite' },   // 500 RPD
-    { provider: 'gemini', model: 'gemini-3.5-flash-lite' },   // 500 RPD
-    { provider: 'openai', model: 'gpt-5.6-terra'         },   // OpenAI fallback
+const openai = process.env.OPENAI_API_KEY
+    ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    : null;
+
+if (!openai) {
+    console.info('[AI] OPENAI_API_KEY not set — running Gemini-only (no cross-provider fallback).');
+}
+
+const FULL_PROVIDER_CHAIN = [
+    { provider: 'gemini', model: 'gemini-3.1-flash-lite' },
+    { provider: 'gemini', model: 'gemini-3.5-flash-lite' },
+    { provider: 'openai', model: 'gpt-5.6-terra' },
 ];
 
-const MAX_RETRIES    = 2;          // attempts per model before falling through
-const BACKOFF_MS     = [1000, 2000]; // delay before attempt 2, attempt 3
+// Drop OpenAI entirely if no key is configured — avoids attempting (and
+// failing) a call we already know will error on missing credentials.
+const PROVIDER_CHAIN = FULL_PROVIDER_CHAIN.filter(
+    (t) => t.provider !== 'openai' || openai !== null
+);
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+const MAX_RETRIES = 2;
+const BACKOFF_MS = [1000, 2000];
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Returns true for transient overload/rate-limit errors → retry + fall-through.
- * Returns false for hard errors (auth, bad request, etc.) → throw immediately.
- * 404 (model not found) is treated as fall-through-only (no retry on same model).
- */
+/** Transient errors -> retry, then fall through to the next provider. */
 function isRetryable(err) {
-    const msg    = String(err?.message || err);
+    const msg = String(err?.message || err);
     const status = err?.status ?? err?.response?.status;
     return (
         status === 503 || status === 429 || status === 404 ||
         msg.includes('UNAVAILABLE') ||
-        msg.includes('503')         ||
-        msg.includes('429')         ||
-        msg.includes('overloaded')  ||
+        msg.includes('503') ||
+        msg.includes('429') ||
+        msg.includes('overloaded') ||
         msg.includes('high demand') ||
-        msg.includes('rate limit')  ||
-        msg.includes('NOT_FOUND')   ||
+        msg.includes('rate limit') ||
+        msg.includes('NOT_FOUND') ||
         msg.includes('no longer available')
     );
 }
 
-/**
- * 404 / model-not-found errors: don't retry the same model, just fall through.
- */
+/** Model doesn't exist / was retired -> skip retries, fall through immediately. */
 function isModelNotFound(err) {
-    const msg    = String(err?.message || err);
+    const msg = String(err?.message || err);
     const status = err?.status ?? err?.response?.status;
     return (
         status === 404 ||
@@ -69,25 +71,19 @@ function isModelNotFound(err) {
     );
 }
 
-// ─── Per-provider call ─────────────────────────────────────────────────────────
-/**
- * @param {{ provider: string, model: string }} target
- * @param {string}      prompt      Full prompt text
- * @param {object|null} jsonSchema  Gemini responseSchema object (optional)
- *                                  When provided to OpenAI the schema is
- *                                  described in the prompt instead.
- * @returns {Promise<string>} Raw text / JSON string from the model
- */
+/** Billing/quota exhausted -> retrying will never help, skip straight to next provider. */
+function isQuotaExceeded(err) {
+    const msg = String(err?.message || err).toLowerCase();
+    return msg.includes('credit') || msg.includes('insufficient_quota') || msg.includes('billing');
+}
+
 async function callModel(target, prompt, jsonSchema) {
     if (target.provider === 'gemini') {
-        const params = {
-            model:    target.model,
-            contents: prompt,
-        };
+        const params = { model: target.model, contents: prompt };
         if (jsonSchema) {
             params.config = {
                 responseMimeType: 'application/json',
-                responseSchema:   jsonSchema,
+                responseSchema: jsonSchema,
             };
         }
         const res = await gemini.models.generateContent(params);
@@ -95,12 +91,12 @@ async function callModel(target, prompt, jsonSchema) {
     }
 
     if (target.provider === 'openai') {
+        if (!openai) throw new Error('OpenAI provider requested but OPENAI_API_KEY is not configured.');
         const params = {
-            model:    target.model,
+            model: target.model,
             messages: [{ role: 'user', content: prompt }],
         };
         if (jsonSchema) {
-            // OpenAI JSON mode: schema described in prompt, response forced to JSON
             params.response_format = { type: 'json_object' };
         }
         const res = await openai.chat.completions.create(params);
@@ -110,46 +106,46 @@ async function callModel(target, prompt, jsonSchema) {
     throw new Error(`Unknown provider: ${target.provider}`);
 }
 
-// ─── Public API ────────────────────────────────────────────────────────────────
 /**
  * generateWithFallback
  *
- * Tries each entry in PROVIDER_CHAIN. Each model gets MAX_RETRIES attempts
- * with exponential backoff on retryable errors (503/429). Non-retryable errors
- * throw immediately. If a model's retries are exhausted it falls through to
- * the next entry. If the entire chain is exhausted the last error is thrown.
+ * Tries each entry in PROVIDER_CHAIN in order. Each model gets MAX_RETRIES
+ * attempts with exponential backoff on retryable errors. Model-not-found and
+ * quota-exceeded errors skip retries and fall through immediately. Non-retryable
+ * errors (auth, bad request) throw immediately without trying other providers.
  *
- * @param {string}      prompt      The full prompt to send
- * @param {object|null} jsonSchema  Optional Gemini-style response schema
- * @returns {Promise<string>}       Model output as a string
+ * @param {string} prompt
+ * @param {object|null} jsonSchema  Optional Gemini-style response schema.
+ * @returns {Promise<string>}
  */
 export async function generateWithFallback(prompt, jsonSchema = null) {
+    if (PROVIDER_CHAIN.length === 0) {
+        throw new Error('No AI providers are configured. Set GEMINI_API_KEY (and optionally OPENAI_API_KEY).');
+    }
+
     let lastError;
 
     for (const target of PROVIDER_CHAIN) {
         for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
                 const result = await callModel(target, prompt, jsonSchema);
-                // Log which model was actually used (useful for debugging)
                 const label = `${target.provider}:${target.model}`;
                 if (target !== PROVIDER_CHAIN[0]) {
-                    console.info(`[AI] Used fallback — ${label}`);
+                    console.info(`[AI] Used fallback - ${label}`);
                 }
                 return result;
             } catch (err) {
                 lastError = err;
 
-                // Model not found — skip retries for this model, fall through immediately
-                if (isModelNotFound(err)) {
+                if (isModelNotFound(err) || isQuotaExceeded(err)) {
                     console.warn(
-                        `[AI] ${target.provider}:${target.model} not available — ` +
-                        `falling through to next provider...`
+                        `[AI] ${target.provider}:${target.model} unavailable (${isQuotaExceeded(err) ? 'quota' : 'not found'
+                        }) - falling through to next provider...`
                     );
-                    break; // break out of retry loop, continue PROVIDER_CHAIN
+                    break;
                 }
 
                 if (!isRetryable(err)) {
-                    // Hard failure (auth error, invalid request, etc.) — don't retry
                     console.error(`[AI] Non-retryable error from ${target.provider}:${target.model}:`, err?.message || err);
                     throw err;
                 }
@@ -157,20 +153,19 @@ export async function generateWithFallback(prompt, jsonSchema = null) {
                 if (attempt < MAX_RETRIES - 1) {
                     const delay = BACKOFF_MS[attempt];
                     console.warn(
-                        `[AI] ${target.provider}:${target.model} overloaded, ` +
-                        `retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})...`
+                        `[AI] ${target.provider}:${target.model} overloaded, retrying in ${delay}ms ` +
+                        `(attempt ${attempt + 1}/${MAX_RETRIES})...`
                     );
                     await sleep(delay);
                 } else {
                     console.warn(
-                        `[AI] ${target.provider}:${target.model} exhausted after ` +
-                        `${MAX_RETRIES} attempts — falling through to next provider...`
+                        `[AI] ${target.provider}:${target.model} exhausted after ${MAX_RETRIES} attempts - ` +
+                        `falling through to next provider...`
                     );
                 }
             }
         }
     }
 
-    // Every provider in the chain failed
     throw lastError;
 }

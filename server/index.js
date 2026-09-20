@@ -2,8 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import fs from 'fs';
-import path from 'path';
 
 import { generateWithFallback } from './aiProvider.js';
 import { extractTextFromFile } from './services/documentService.js';
@@ -20,12 +18,25 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-const upload = multer({ dest: 'uploads/' });
+const ALLOWED_MIME_TYPES = new Set([
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+]);
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 
-/**
- * Central error response helper — returns a user-friendly message
- * when Gemini is overloaded, vs. a raw error for other failures.
- */
+const upload = multer({
+    dest: 'uploads/',
+    limits: { fileSize: MAX_FILE_SIZE_BYTES },
+    fileFilter: (req, file, cb) => {
+        const isAllowed =
+            ALLOWED_MIME_TYPES.has(file.mimetype) || file.originalname.toLowerCase().endsWith('.docx');
+        if (!isAllowed) {
+            return cb(new Error('Unsupported file type. Please upload a PDF or DOCX file.'));
+        }
+        cb(null, true);
+    },
+});
+
 function handleApiError(res, error) {
     const errStr = String(error?.message || error);
     const isOverloaded =
@@ -45,7 +56,6 @@ function handleApiError(res, error) {
     return res.status(500).json({ error: errStr });
 }
 
-// ─── Health Check ───────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
     try {
         const text = await generateWithFallback('Say hello');
@@ -55,7 +65,6 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
-// ─── Upload ──────────────────────────────────────────────────────────────────
 app.post('/api/upload', upload.single('document'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -66,7 +75,6 @@ app.post('/api/upload', upload.single('document'), async (req, res) => {
     }
 });
 
-// ─── Simplify ────────────────────────────────────────────────────────────────
 app.post('/api/simplify', async (req, res) => {
     try {
         const { text, readingLevel } = req.body;
@@ -78,7 +86,6 @@ app.post('/api/simplify', async (req, res) => {
     }
 });
 
-// ─── Analyze ─────────────────────────────────────────────────────────────────
 app.post('/api/analyze', async (req, res) => {
     try {
         const { text } = req.body;
@@ -90,7 +97,6 @@ app.post('/api/analyze', async (req, res) => {
     }
 });
 
-// ─── Compare ─────────────────────────────────────────────────────────────────
 app.post('/api/compare', async (req, res) => {
     try {
         const { docA, docB } = req.body;
@@ -102,7 +108,6 @@ app.post('/api/compare', async (req, res) => {
     }
 });
 
-// ─── Index Document (for Q&A embeddings) ─────────────────────────────────────
 app.post('/api/index-document', async (req, res) => {
     try {
         const { sessionId, text } = req.body;
@@ -114,7 +119,6 @@ app.post('/api/index-document', async (req, res) => {
     }
 });
 
-// ─── Ask Question ─────────────────────────────────────────────────────────────
 app.post('/api/ask', async (req, res) => {
     try {
         const { sessionId, question } = req.body;
@@ -126,7 +130,6 @@ app.post('/api/ask', async (req, res) => {
     }
 });
 
-// ─── Generate Checklist ───────────────────────────────────────────────────────
 app.post('/api/checklist', async (req, res) => {
     try {
         const { analysisResult } = req.body;
@@ -138,5 +141,22 @@ app.post('/api/checklist', async (req, res) => {
     }
 });
 
+// Global error handler - catches multer errors (bad file type / too large)
+// so they return clean JSON instead of Express's default HTML error page.
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError || err) {
+        return res.status(400).json({ error: err.message || 'Invalid request' });
+    }
+    next();
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// Only start listening outside of the test environment - this is what makes
+// the app testable with supertest without actually binding a port. Jest sets
+// NODE_ENV=test automatically, so no extra config is needed for this to work.
+if (process.env.NODE_ENV !== 'test') {
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}
+
+export default app;
