@@ -18,6 +18,9 @@ import {
 
 const app = express();
 
+// Enable reverse proxy support (Render/Vercel/Heroku load balancers)
+app.set('trust proxy', 1);
+
 // Security headers (CSP disabled - this is a JSON/API server, not a page host)
 app.use(helmet({ contentSecurityPolicy: false }));
 

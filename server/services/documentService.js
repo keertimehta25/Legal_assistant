@@ -43,7 +43,11 @@ export const extractTextFromFile = async (file) => {
 
         return text;
     } catch (error) {
-        throw new Error(`Failed to extract text: ${error.message}`);
+        const errMsg = error?.message || String(error);
+        if (errMsg.includes('XRef') || errMsg.includes('Invalid PDF structure')) {
+            throw new Error('Unable to extract text from this PDF because it has a corrupted or non-standard structure (bad XRef). Please try resaving or converting the PDF.');
+        }
+        throw new Error(`Failed to extract text: ${errMsg}`);
     } finally {
         // Always clean up the temp upload, even if extraction failed
         await fs.unlink(filePath).catch(() => {});
