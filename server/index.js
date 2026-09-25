@@ -24,14 +24,20 @@ app.set('trust proxy', 1);
 // Security headers (CSP disabled - this is a JSON/API server, not a page host)
 app.use(helmet({ contentSecurityPolicy: false }));
 
-// CORS: restrict to the configured frontend origin(s) in production. Falls
-// back to allowing any origin only when CLIENT_ORIGIN is unset, so local
-// dev/demo setups keep working without extra config.
+// CORS: restrict to the configured frontend origin(s) in production.
+const defaultOrigins = [
+    'https://legal-assistant-lyart.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000'
+];
 const allowedOrigins = process.env.CLIENT_ORIGIN
     ? process.env.CLIENT_ORIGIN.split(',').map((o) => o.trim())
-    : null;
+    : defaultOrigins;
+
 app.use(cors({
-    origin: allowedOrigins ?? true,
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
 }));
 
 app.use(express.json({ limit: '10mb' }));
