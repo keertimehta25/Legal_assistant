@@ -1,14 +1,28 @@
 import fs from 'fs/promises';
-// Import pdf-parse's real implementation directly (lib/pdf-parse.js), NOT the
-// package's index.js. index.js has a leftover debug block guarded by
-// `!module.parent` intended to only run when the file is executed directly -
-// but that check misfires when required from an ES module context (this
-// file), causing it to crash on startup trying to read a nonexistent sample
-// PDF. lib/pdf-parse.js is the actual parser with no such side effect.
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import mammoth from 'mammoth';
 
 const MAX_EXTRACTED_CHARS = 200_000; // guard against blowing model context limits
+
+/**
+ * Fallback PDF text extraction using pdfjs-dist for PDFs with corrupted / bad XRef tables
+ */
+async function parsePdfWithPdfJsFallback(dataBuffer) {
+    // Dynamically import pdfjs-dist legacy build (Node.js compatible)
+    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js');
+    const uint8Array = new Uint8Array(dataBuffer);
+    const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
+    const pdfDocument = await loadingTask.promise;
+    
+    const pageTexts = [];
+    for (let i = 1; i <= pdfDocument.numPages; i++) {
+        const page = await pdfDocument.getPage(i);
+        const tokenizedText = await page.getTextContent();
+        const pageText = tokenizedText.items.map((item) => item.str).join(' ');
+        pageTexts.push(pageText);
+    }
+    return pageTexts.join('\n');
+}
 
 export const extractTextFromFile = async (file) => {
     const filePath = file.path;
@@ -17,8 +31,20 @@ export const extractTextFromFile = async (file) => {
 
         if (file.mimetype === 'application/pdf') {
             const dataBuffer = await fs.readFile(filePath);
-            const data = await pdfParse(dataBuffer);
-            text = data.text;
+            try {
+                // Primary parser: fast & lightweight
+                const data = await pdfParse(dataBuffer);
+                text = data.text;
+            } catch (primaryErr) {
+                console.warn(`[documentService] Primary pdf-parse failed (${primaryErr?.message || primaryErr}). Trying pdfjs-dist fallback...`);
+                try {
+                    // Fallback parser: robust against bad XRef tables / non-standard structures
+                    text = await parsePdfWithPdfJsFallback(dataBuffer);
+                } catch (fallbackErr) {
+                    console.error('[documentService] Fallback pdfjs-dist parser also failed:', fallbackErr?.message || fallbackErr);
+                    throw primaryErr; // Rethrow primary error if fallback also fails
+                }
+            }
         } else if (
             file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
             file.originalname.toLowerCase().endsWith('.docx')

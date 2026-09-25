@@ -21,7 +21,8 @@
     "mammoth": "^1.12.3",
     "multer": "^2.3.0",
     "openai": "^4.104.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^3.11.174"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
