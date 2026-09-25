@@ -92,6 +92,14 @@ function handleApiError(res, error) {
     return res.status(500).json({ error: errStr });
 }
 
+app.get('/', (req, res) => {
+    res.json({
+        service: 'LegalLens API',
+        status: 'ok',
+        docs: 'This is the backend API only. See /api/health for a liveness check.',
+    });
+});
+
 app.get('/api/health', async (req, res) => {
     try {
         const text = await generateWithFallback('Say hello');
