@@ -130,18 +130,29 @@ function rememberSession(sessionId, embeddings) {
     documentStore.set(sessionId, embeddings);
 }
 
+// Embedding calls are network round-trips, so embedding chunks one-at-a-time
+// (fully sequential) leaves most of the wait time idle. We embed in small
+// concurrent batches instead - fast enough to matter on a multi-page
+// document, while staying well under typical per-second API rate limits.
+const EMBED_CONCURRENCY = 5;
+
 export const indexDocument = async (sessionId, text) => {
     const words  = text.split(/\s+/);
     const chunks = [];
     for (let i = 0; i < words.length; i += 500) {
-        chunks.push(words.slice(i, i + 500).join(' '));
+        const chunk = words.slice(i, i + 500).join(' ');
+        if (chunk.trim()) chunks.push(chunk);
     }
 
     const embeddings = [];
-    for (const chunk of chunks) {
-        if (!chunk.trim()) continue;
-        const result = await embedWithRetry({ contents: chunk });
-        embeddings.push({ text: chunk, embedding: result.embeddings[0].values });
+    for (let i = 0; i < chunks.length; i += EMBED_CONCURRENCY) {
+        const batch = chunks.slice(i, i + EMBED_CONCURRENCY);
+        const results = await Promise.all(
+            batch.map((chunk) => embedWithRetry({ contents: chunk }))
+        );
+        results.forEach((result, idx) => {
+            embeddings.push({ text: batch[idx], embedding: result.embeddings[0].values });
+        });
     }
 
     rememberSession(sessionId, embeddings);

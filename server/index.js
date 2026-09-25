@@ -2,6 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 import { generateWithFallback } from './aiProvider.js';
 import { extractTextFromFile } from './services/documentService.js';
@@ -15,8 +17,42 @@ import {
 } from './services/geminiService.js';
 
 const app = express();
-app.use(cors());
+
+// Security headers (CSP disabled - this is a JSON/API server, not a page host)
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// CORS: restrict to the configured frontend origin(s) in production. Falls
+// back to allowing any origin only when CLIENT_ORIGIN is unset, so local
+// dev/demo setups keep working without extra config.
+const allowedOrigins = process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(',').map((o) => o.trim())
+    : null;
+app.use(cors({
+    origin: allowedOrigins ?? true,
+}));
+
 app.use(express.json({ limit: '10mb' }));
+
+// Every AI-backed route costs real API quota/money and can be hammered by a
+// script. A generous but real ceiling protects the service without getting
+// in the way of a normal demo/judging session.
+const aiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests - please slow down and try again shortly.' },
+});
+app.use('/api/', aiLimiter);
+
+// Hard ceiling on any raw text sent directly in a JSON body (as opposed to a
+// file upload, which is already capped by MAX_FILE_SIZE_BYTES). Prevents a
+// client from bypassing the upload size limit by pasting huge text directly
+// into /simplify, /analyze, /compare, or /ask and running up AI costs.
+const MAX_TEXT_CHARS = 200_000;
+function isTextWithinLimit(text) {
+    return typeof text === 'string' && text.length <= MAX_TEXT_CHARS;
+}
 
 const ALLOWED_MIME_TYPES = new Set([
     'application/pdf',
@@ -79,6 +115,9 @@ app.post('/api/simplify', async (req, res) => {
     try {
         const { text, readingLevel } = req.body;
         if (!text) return res.status(400).json({ error: 'text is required' });
+        if (!isTextWithinLimit(text)) {
+            return res.status(413).json({ error: `text exceeds the ${MAX_TEXT_CHARS.toLocaleString()} character limit` });
+        }
         const result = await simplifyLegalText(text, readingLevel || 'general public');
         res.json({ simplifiedText: result });
     } catch (error) {
@@ -90,6 +129,9 @@ app.post('/api/analyze', async (req, res) => {
     try {
         const { text } = req.body;
         if (!text) return res.status(400).json({ error: 'text is required' });
+        if (!isTextWithinLimit(text)) {
+            return res.status(413).json({ error: `text exceeds the ${MAX_TEXT_CHARS.toLocaleString()} character limit` });
+        }
         const result = await analyzeLegalDocument(text);
         res.json(result);
     } catch (error) {
@@ -101,6 +143,9 @@ app.post('/api/compare', async (req, res) => {
     try {
         const { docA, docB } = req.body;
         if (!docA || !docB) return res.status(400).json({ error: 'docA and docB are required' });
+        if (!isTextWithinLimit(docA) || !isTextWithinLimit(docB)) {
+            return res.status(413).json({ error: `each document exceeds the ${MAX_TEXT_CHARS.toLocaleString()} character limit` });
+        }
         const result = await compareDocuments(docA, docB);
         res.json(result);
     } catch (error) {
@@ -112,6 +157,9 @@ app.post('/api/index-document', async (req, res) => {
     try {
         const { sessionId, text } = req.body;
         if (!sessionId || !text) return res.status(400).json({ error: 'sessionId and text are required' });
+        if (!isTextWithinLimit(text)) {
+            return res.status(413).json({ error: `text exceeds the ${MAX_TEXT_CHARS.toLocaleString()} character limit` });
+        }
         await indexDocument(sessionId, text);
         res.json({ success: true });
     } catch (error) {
@@ -123,6 +171,9 @@ app.post('/api/ask', async (req, res) => {
     try {
         const { sessionId, question } = req.body;
         if (!sessionId || !question) return res.status(400).json({ error: 'sessionId and question are required' });
+        if (!isTextWithinLimit(question)) {
+            return res.status(413).json({ error: `question exceeds the ${MAX_TEXT_CHARS.toLocaleString()} character limit` });
+        }
         const result = await answerQuestion(sessionId, question);
         res.json(result);
     } catch (error) {
@@ -141,13 +192,19 @@ app.post('/api/checklist', async (req, res) => {
     }
 });
 
-// Global error handler - catches multer errors (bad file type / too large)
+// Global error handler — catches multer errors (bad file type / too large)
 // so they return clean JSON instead of Express's default HTML error page.
+// Note: the condition MUST be `instanceof multer.MulterError` only — adding
+// `|| err` would make this always-truthy and swallow real 500s as 400s.
 app.use((err, req, res, next) => {
-    if (err instanceof multer.MulterError || err) {
-        return res.status(400).json({ error: err.message || 'Invalid request' });
+    if (err instanceof multer.MulterError) {
+        return res.status(400).json({ error: err.message || 'File upload error' });
     }
-    next();
+    // fileFilter rejections come through as plain Errors, not MulterError
+    if (err?.message?.includes('Unsupported file type')) {
+        return res.status(415).json({ error: err.message });
+    }
+    next(err);
 });
 
 const PORT = process.env.PORT || 3000;

@@ -2,22 +2,27 @@ import React, { useState } from 'react';
 import { useSession } from '../context/SessionContext';
 import { uploadDocument, compareDocuments } from '../api/client';
 
-function UploadSlot({ label, fileName, onFileSelected, disabled }) {
+function UploadSlot({ id, label, fileName, onFileSelected, disabled }) {
     return (
-        <label
-            className={`block border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer
-        ${disabled ? 'border-slate-300 bg-slate-100 cursor-not-allowed' : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50'}`}
-        >
-            <input
-                type="file"
-                accept=".pdf,.docx"
-                className="hidden"
-                disabled={disabled}
-                onChange={(e) => e.target.files[0] && onFileSelected(e.target.files[0])}
-            />
-            <p className="font-medium text-slate-700">{label}</p>
-            <p className="text-sm text-slate-500 mt-1">{fileName || 'Click to upload PDF or DOCX'}</p>
-        </label>
+        <div>
+            <label
+                htmlFor={id}
+                className={`block border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer
+            ${disabled ? 'border-slate-300 bg-slate-100 cursor-not-allowed' : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50 focus-within:ring-2 focus-within:ring-blue-400'}`}
+            >
+                <input
+                    id={id}
+                    type="file"
+                    accept=".pdf,.docx"
+                    className="sr-only"
+                    disabled={disabled}
+                    aria-label={`Upload ${label} (PDF or DOCX)`}
+                    onChange={(e) => e.target.files[0] && onFileSelected(e.target.files[0])}
+                />
+                <p className="font-medium text-slate-700">{label}</p>
+                <p className="text-sm text-slate-500 mt-1">{fileName || 'Click to upload PDF or DOCX'}</p>
+            </label>
+        </div>
     );
 }
 
@@ -84,8 +89,8 @@ export default function ComparePage() {
             </div>
 
             <div className="grid md:grid-cols-2 gap-6">
-                <UploadSlot label="Document A" fileName={docAName} disabled={loading} onFileSelected={(f) => handleUpload('A', f)} />
-                <UploadSlot label="Document B" fileName={docBName} disabled={loading} onFileSelected={(f) => handleUpload('B', f)} />
+                <UploadSlot id="doc-a-upload" label="Document A" fileName={docAName} disabled={loading} onFileSelected={(f) => handleUpload('A', f)} />
+                <UploadSlot id="doc-b-upload" label="Document B" fileName={docBName} disabled={loading} onFileSelected={(f) => handleUpload('B', f)} />
             </div>
 
             {error && (

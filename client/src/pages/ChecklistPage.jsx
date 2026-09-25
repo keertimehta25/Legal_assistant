@@ -5,6 +5,7 @@ import { generateChecklist } from '../api/client';
 export default function ChecklistPage() {
     const { analysisResult } = useSession();
     const [checklist, setChecklist] = useState(null);
+    const [checkedItems, setCheckedItems] = useState({});
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -14,11 +15,16 @@ export default function ChecklistPage() {
         try {
             const data = await generateChecklist(analysisResult);
             setChecklist(data);
+            setCheckedItems({});
         } catch (err) {
             setError(err.message);
         } finally {
             setLoading(false);
         }
+    };
+
+    const toggleItem = (i) => {
+        setCheckedItems((prev) => ({ ...prev, [i]: !prev[i] }));
     };
 
     if (!analysisResult) {
@@ -53,8 +59,19 @@ export default function ChecklistPage() {
                         <ul className="space-y-3">
                             {checklist.action_checklist?.map((item, i) => (
                                 <li key={i} className="flex items-start gap-3">
-                                    <input type="checkbox" className="mt-1 w-5 h-5 text-blue-600 rounded" />
-                                    <span className="text-slate-700">{item}</span>
+                                    <input
+                                        id={`checklist-item-${i}`}
+                                        type="checkbox"
+                                        className="mt-1 w-5 h-5 text-blue-600 rounded"
+                                        checked={!!checkedItems[i]}
+                                        onChange={() => toggleItem(i)}
+                                    />
+                                    <label
+                                        htmlFor={`checklist-item-${i}`}
+                                        className={`text-slate-700 ${checkedItems[i] ? 'line-through text-slate-400' : ''}`}
+                                    >
+                                        {item}
+                                    </label>
                                 </li>
                             ))}
                         </ul>
