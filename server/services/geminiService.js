@@ -134,13 +134,14 @@ export const compareDocuments = async (docA, docB) => {
 };
 
 // ─── Embedding store (Gemini-only — no provider fallback needed for Q&A) ──────
-// Bounded to MAX_SESSIONS to avoid unbounded memory growth on a long-running
-// server; oldest session is evicted (simple FIFO, not true LRU).
+// Bounded to MAX_SESSIONS with true LRU eviction to prevent unbounded memory growth.
 const MAX_SESSIONS = 50;
 const documentStore = new Map(); // Map<sessionId, Array<{ text, embedding }>>
 
 function rememberSession(sessionId, embeddings) {
-    if (documentStore.size >= MAX_SESSIONS && !documentStore.has(sessionId)) {
+    if (documentStore.has(sessionId)) {
+        documentStore.delete(sessionId); // re-insert to update access order
+    } else if (documentStore.size >= MAX_SESSIONS) {
         const oldestKey = documentStore.keys().next().value;
         documentStore.delete(oldestKey);
     }
@@ -187,10 +188,12 @@ function cosineSimilarity(a, b) {
 
 // ─── Ask ──────────────────────────────────────────────────────────────────────
 export const answerQuestion = async (sessionId, question) => {
-    const embeddings = documentStore.get(sessionId) || [];
-    if (embeddings.length === 0) {
+    const embeddings = documentStore.get(sessionId);
+    if (!embeddings || embeddings.length === 0) {
         return { answer: 'No document indexed for this session.', chunks: [] };
     }
+    // Refresh LRU order on access
+    rememberSession(sessionId, embeddings);
 
     const qResult  = await embedWithRetry({ contents: question });
     const qEmbed   = qResult.embeddings[0].values;
