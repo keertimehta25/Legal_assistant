@@ -155,8 +155,8 @@ export async function generateWithFallback(prompt, jsonSchema = null) {
                 }
 
                 if (!isRetryable(err)) {
-                    console.error(`[AI] Non-retryable error from ${target.provider}:${target.model}:`, err?.message || err);
-                    throw err;
+                    console.warn(`[AI] Non-retryable error from ${target.provider}:${target.model}:`, err?.message || err, '- falling through to next provider...');
+                    break;
                 }
 
                 if (attempt < MAX_RETRIES - 1) {
