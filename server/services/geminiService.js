@@ -76,12 +76,29 @@ export const generateHealthResponse = async () => {
     return generateWithFallback('Say hello');
 };
 
+// Wraps JSON.parse so a malformed/truncated AI response surfaces as a clear,
+// user-facing message instead of a raw "Unterminated string in JSON..."
+// SyntaxError bubbling straight to the frontend.
+function parseModelJson(raw, context) {
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        console.error(`[AI] Failed to parse JSON for ${context}:`, err.message);
+        throw new Error(
+            `The AI's response for ${context} could not be parsed - it may have been cut off. Please try again.`
+        );
+    }
+}
+
 // ─── Simplify ─────────────────────────────────────────────────────────────────
 export const simplifyLegalText = async (text, readingLevel = 'general public') => {
     const prompt =
-        `Rewrite the following legal text in plain language at a "${readingLevel}" reading level. ` +
-        `Preserve all important obligations and deadlines. Do not give legal advice — only explain ` +
-        `what the text says.\n\nText:\n${text}`;
+        `You are a legal document simplifier. Rewrite the ENTIRE legal document below in plain language at a "${readingLevel}" reading level.\n\n` +
+        `IMPORTANT REQUIREMENTS:\n` +
+        `- Do NOT summarize or skip sections. Cover every single clause and section from start to end.\n` +
+        `- Maintain section-by-section structure so the simplified output maps directly to the original document.\n` +
+        `- Preserve all important obligations, deadlines, and rights. Do not give legal advice — only explain what the text says in plain English.\n\n` +
+        `Text:\n${text}`;
 
     return generateWithFallback(prompt);
 };
@@ -98,7 +115,7 @@ export const analyzeLegalDocument = async (text) => {
         `Document:\n${text}`;
 
     const raw = await generateWithFallback(prompt, ANALYSIS_SCHEMA);
-    return JSON.parse(raw);
+    return parseModelJson(raw, 'document analysis');
 };
 
 // ─── Compare ──────────────────────────────────────────────────────────────────
@@ -113,7 +130,7 @@ export const compareDocuments = async (docA, docB) => {
         `Document A:\n${docA}\n\nDocument B:\n${docB}`;
 
     const raw = await generateWithFallback(prompt, COMPARE_SCHEMA);
-    return JSON.parse(raw);
+    return parseModelJson(raw, 'document comparison');
 };
 
 // ─── Embedding store (Gemini-only — no provider fallback needed for Q&A) ──────
@@ -202,5 +219,5 @@ export const generateChecklist = async (analysisResult) => {
         `Analysis:\n${JSON.stringify(analysisResult, null, 2)}`;
 
     const raw = await generateWithFallback(prompt, CHECKLIST_SCHEMA);
-    return JSON.parse(raw);
+    return parseModelJson(raw, 'action checklist');
 };

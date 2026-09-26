@@ -55,7 +55,8 @@ function isRetryable(err) {
         msg.includes('high demand') ||
         msg.includes('rate limit') ||
         msg.includes('NOT_FOUND') ||
-        msg.includes('no longer available')
+        msg.includes('no longer available') ||
+        msg.includes('MAX_TOKENS')
     );
 }
 
@@ -80,13 +81,20 @@ function isQuotaExceeded(err) {
 async function callModel(target, prompt, jsonSchema) {
     if (target.provider === 'gemini') {
         const params = { model: target.model, contents: prompt };
+        params.config = { maxOutputTokens: 16384 };
         if (jsonSchema) {
-            params.config = {
-                responseMimeType: 'application/json',
-                responseSchema: jsonSchema,
-            };
+            params.config.responseMimeType = 'application/json';
+            params.config.responseSchema = jsonSchema;
         }
         const res = await gemini.models.generateContent(params);
+
+        const finishReason = res.candidates?.[0]?.finishReason;
+        if (finishReason === 'MAX_TOKENS') {
+            throw new Error(
+                'MAX_TOKENS: The response was cut off before it finished. This usually happens with very long or very detailed documents.'
+            );
+        }
+
         return res.text;
     }
 
@@ -95,6 +103,7 @@ async function callModel(target, prompt, jsonSchema) {
         const params = {
             model: target.model,
             messages: [{ role: 'user', content: prompt }],
+            max_tokens: 16384,
         };
         if (jsonSchema) {
             params.response_format = { type: 'json_object' };

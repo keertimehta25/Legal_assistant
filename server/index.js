@@ -98,6 +98,13 @@ function handleApiError(res, error) {
         });
     }
 
+    if (errStr.includes('MAX_TOKENS') || errStr.includes('could not be parsed')) {
+        return res.status(502).json({
+            error: 'The AI response was too long and got cut off before finishing. Try again, or use a shorter/split document.',
+            retryable: true,
+        });
+    }
+
     console.error('[API Error]', errStr);
     return res.status(500).json({ error: errStr });
 }
